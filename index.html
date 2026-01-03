@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SmartTransit — Live Bus Tracking</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    
+    <style>
+        /* Custom animations */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(18px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .ani-fade-up { animation: fadeUp .7s ease-out both; }
+
+        /* Custom scrollbar */
+        .custom-scroll::-webkit-scrollbar { height: 8px; width: 8px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 999px; }
+
+        /* Leaflet container fix */
+        #map .leaflet-control-container { border-radius: 16px; overflow: hidden; }
+
+        /* Input icon style */
+        .input-icon { width: 1.4rem; height: 1.4rem; opacity: .85; }
+
+        /* Timeline styles */
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: 1.25rem;
+            top: 1.25rem;
+            bottom: -1.25rem;
+            width: 2px;
+            background-color: #e5e7eb;
+            transform: translateX(-50%);
+        }
+        .timeline-item:last-child::before { display: none; }
+        .timeline-dot {
+            position: absolute;
+            left: 1.25rem;
+            top: 1.25rem;
+            transform: translate(-50%, -50%);
+        }
+        .bus-icon { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans text-gray-800">
+
+    <header class="relative bg-gradient-to-r from-indigo-600 via-indigo-500 to-indigo-400">
+        <nav class="sticky top-0 z-40 flex justify-between items-center p-4 bg-white/80 backdrop-blur-md shadow-lg">
+            <div class="flex items-center gap-4">
+                <div class="bg-indigo-600/20 p-2 rounded-full">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 10h14v6H3z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="7.5" cy="17.5" r="1.5" fill="currentColor"/>
+                        <circle cx="13.5" cy="17.5" r="1.5" fill="currentColor"/>
+                    </svg>
+                </div>
+                <div class="text-indigo-600 font-bold text-xl">SmartTransit</div>
+            </div>
+            <div class="flex items-center space-x-2">
+                <div class="relative">
+                    <button id="bookingsLink" class="text-gray-600 hover:text-indigo-600 px-3 py-1">Bookings</button>
+                    <div id="bookingsDropdown" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50">
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" id="yourBookings">Your Bookings</a>
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" id="previousBookings">Previous Bookings</a>
+                    </div>
+                </div>
+                <a class="text-gray-600 hover:text-indigo-600 px-3 py-1" href="#" id="helpLink">Help</a>
+                <div class="relative">
+                    <button id="accountBtn" class="bg-white/20 text-gray-600 px-3 py-1 rounded-full hover:bg-indigo-100">Account</button>
+                    <div id="accountDropdown" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50">
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">My Profile</a>
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Settings</a>
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Logout</a>
+                    </div>
+                </div>
+                <a href="#" id="routeMapLink" class="bg-white text-blue-600 px-4 py-3 rounded-full shadow-lg hover:bg-gray-100 text-lg font-semibold" data-translate="route_map_link">🗺️ Route Map</a>
+                <select id="language-selector" class="appearance-none bg-white border border-gray-300 text-gray-800 py-2 pl-3 pr-8 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold text-lg shadow-lg transition duration-300">
+                    <option value="en">English</option>
+                    <option value="hi">हिन्दी</option>
+                    <option value="pa">ਪੰਜਾਬੀ</option>
+                </select>
+                <button onclick="toggleChatbot()" class="bg-blue-600 text-white p-3 rounded-full shadow-lg hover:bg-blue-700" data-translate="chat_btn">💬 Chat</button>
+            </div>
+        </nav>
+
+        <div class="max-w-7xl mx-auto px-6 lg:px-8 pb-16 pt-8">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+                <div class="text-white">
+                    <h1 class="text-4xl md:text-5xl font-extrabold leading-tight drop-shadow-lg" data-translate="main_heading">India's No.1 bus tracking & booking experience</h1>
+                    <p class="mt-4 text-lg text-white/90 max-w-xl" data-translate="main_subheading">Real-time vehicle locations, smart ETA predictions and easy route planning — all in one place.</p>
+                </div>
+                <div class="flex justify-center lg:justify-end">
+                    <div class="w-[380px] h-[220px] bg-white/8 rounded-2xl p-6 flex items-center justify-center drop-shadow-xl">
+                        <svg viewBox="0 0 700 400" xmlns="http://www.w3.org/2000/svg" class="w-full h-full">
+                            <defs>
+                                <linearGradient id="g1" x1="0" x2="1">
+                                    <stop offset="0" stop-color="#60A5FA"/>
+                                    <stop offset="1" stop-color="#7C3AED"/>
+                                </linearGradient>
+                            </defs>
+                            <rect rx="24" width="100%" height="100%" fill="url(#g1)" opacity="0.15"/>
+                            <rect x="0" y="220" width="100%" height="120" fill="#E6EEF9"/>
+                            <g transform="translate(90,110) scale(0.9)">
+                                <rect x="0" y="40" rx="18" ry="18" width="420" height="130" fill="#ef4444" />
+                                <rect x="24" y="60" rx="10" ry="10" width="220" height="62" fill="#fff3f3" opacity="0.9"/>
+                                <circle cx="90" cy="188" r="20" fill="#111827"/>
+                                <circle cx="330" cy="188" r="20" fill="#111827"/>
+                            </g>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-6 lg:px-8 -mt-24">
+        <div class="col-span-full">
+            <div class="mx-auto px-4">
+                <div class="bg-white rounded-2xl shadow-2xl border border-gray-100 p-4 md:p-5 ani-fade-up">
+                    <form id="searchForm" class="flex flex-col md:flex-row items-center gap-4">
+                        <div class="w-full md:flex-grow flex items-center gap-3 bg-white rounded-lg px-3 py-2.5 border">
+                            <svg class="input-icon text-gray-500" viewBox="0 0 24 24" fill="none"><path d="M3 10h14v6H3z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            <input id="fromInput" type="text" placeholder="From" class="w-full outline-none text-gray-800" />
+                        </div>
+                        <div class="w-full md:flex-grow flex items-center gap-3 bg-white rounded-lg px-3 py-2.5 border">
+                            <svg class="input-icon text-gray-500" viewBox="0 0 24 24" fill="none"><path d="M21 10H7v6h14z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            <input id="toInput" type="text" placeholder="To" class="w-full outline-none text-gray-800" />
+                        </div>
+                        <div class="w-full md:w-auto flex items-center">
+                            <input id="dateInput" type="date" class="w-full outline-none text-gray-800 border rounded-lg px-3 py-2.5" />
+                        </div>
+                        <div class="w-full md:w-auto">
+                            <button class="w-full md:w-auto bg-red-600 text-white px-8 py-2.5 rounded-lg font-semibold shadow hover:shadow-lg transition" type="submit">
+                                Search Buses
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <section class="mt-8 bg-white rounded-xl shadow px-6 py-5 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+                <div class="p-3 rounded-lg bg-green-50">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 20h9" stroke="#10B981" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div>
+                    <div class="font-semibold text-gray-800" data-translate="festive_offer">Book trains for festivals</div>
+                    <div class="text-sm text-gray-500" data-translate="offer_code">Get ₹100 off using code <span class="font-semibold text-green-600">FESTIVE</span></div>
+                </div>
+            </div>
+            <div class="text-sm text-gray-600" data-translate="punjab_bookings">25,000+ people booked from Punjab last month</div>
+        </section>
+
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+            <div class="lg:col-span-3 bg-white rounded-2xl shadow p-4">
+                <h2 class="text-3xl font-bold text-blue-700 mb-4" data-translate="live_map_title">📍 Live Map with Vehicles & Bus Stops</h2>
+                <div id="map" class="w-full h-96 rounded-xl overflow-hidden border border-gray-100"></div>
+                <div class="mt-3 flex items-center gap-3">
+                    <button onclick="refreshLocation()" class="bg-white border px-4 py-2 rounded-lg shadow-sm hover:scale-105 transition" data-translate="refresh_location_btn">Refresh My Location</button>
+                    <button onclick="updateVehicleMarkers()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-sm hover:scale-105 transition" data-translate="refresh_vehicles_btn">Refresh Vehicles</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="mainContent" class="p-6 bg-gray-100 rounded shadow mt-6">
+            <h2 class="text-3xl font-bold text-blue-700 mb-4" data-translate="where_is_my_bus_title">🔍 Where is my Bus?</h2>
+            <div class="flex bg-gray-200 rounded-lg p-1 mb-4">
+                <button id="tab-route" class="flex-1 py-2 px-4 rounded-md text-sm font-semibold bg-white text-blue-600 shadow" data-translate="by_route_tab">By Route</button>
+                <button id="tab-number" class="flex-1 py-2 px-4 rounded-md text-sm font-semibold text-gray-600" data-translate="by_bus_number_tab">By Bus Number</button>
+            </div>
+            <div id="search-forms">
+                <form id="form-route" class="space-y-4">
+                    <div>
+                        <label for="start-point" class="block text-sm font-medium text-gray-700" data-translate="from_label">From</label>
+                        <input type="text" id="start-point" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Kadgil" data-translate="from_placeholder">
+                    </div>
+                    <div>
+                        <label for="destination" class="block text-sm font-medium text-gray-700" data-translate="to_label">To</label>
+                        <input type="text" id="destination" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Tarn Taran Bus Stand" data-translate="to_placeholder">
+                    </div>
+                    <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" data-translate="find_buses_btn">
+                        Find Buses
+                    </button>
+                </form>
+                <form id="form-number" class="space-y-4 hidden">
+                    <div>
+                        <label for="bus-number" class="block text-sm font-medium text-gray-700" data-translate="bus_number_label">Bus Number</label>
+                        <input type="text" id="bus-number" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., 58" data-translate="bus_number_placeholder">
+                    </div>
+                    <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" data-translate="track_bus_btn">
+                        Track Bus
+                    </button>
+                </form>
+            </div>
+            <div id="results" class="mt-6"></div>
+            <div id="history-container" class="mt-8">
+                <h3 class="text-2xl font-semibold text-gray-800 border-b pb-2 mb-3" data-translate="recent_searches_title">Recent Searches</h3>
+                <div id="history-list" class="space-y-2">
+                    <p class="text-center text-gray-500 text-sm" data-translate="search_history_placeholder">Your search history will appear here.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="grid grid-cols-1 md:grid-cols-2 gap-8 mt-6">
+            <div class="p-6 bg-blue-100 rounded shadow">
+                <h3 class="text-2xl font-semibold" data-translate="predictive_eta_title">🧠 Predictive ETA</h3>
+                <label class="block mt-3" data-translate="start_location_label">Start Location:</label>
+                <input type="text" id="etaStartLocation" class="p-2 border rounded w-full"
+                    placeholder="e.g., Kadgil" data-translate="from_placeholder"/>
+                <label class="block mt-3" data-translate="destination_label">Destination:</label>
+                <input type="text" id="etaEndLocation" class="p-2 border rounded w-full"
+                    placeholder="e.g., Tarn Taran Bus Stand" data-translate="to_kashmere_placeholder"/>
+                <button onclick="calculatePredictiveETA()"
+                    class="mt-3 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700" data-translate="predict_eta_btn">Predict
+                    ETA</button>
+                <div id="predictiveEtaResult"
+                    class="mt-4 p-3 bg-white rounded text-blue-800" data-translate="prediction_placeholder">Prediction will appear here...</div>
+            </div>
+            <div class="p-6 bg-green-100 rounded shadow">
+                <h3 class="text-2xl font-semibold" data-translate="route_planner_title">🗺 Smart Route Planner</h3>
+                <label class="block mt-3" data-translate="start_location_label">Start Location:</label>
+                <input type="text" id="startLocationPlanner" class="p-2 border rounded w-full"
+                    placeholder="e.g., Bathinda Bus Stand" data-translate="from_placeholder"/>
+                <label class="block mt-3" data-translate="destination_label">Destination:</label>
+                <input type="text" id="endLocationPlanner" class="p-2 border rounded w-full"
+                    placeholder="e.g., Talwandi Sabo Bus Stand" data-translate="to_placeholder"/>
+                <button onclick="findBestRoute()"
+                    class="mt-3 bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700" data-translate="find_best_route_btn">Find
+                    Best Route</button>
+                <div id="routeRecommendation"
+                    class="mt-4 p-4 bg-white rounded text-green-800 shadow" data-translate="route_reco_placeholder">Enter locations to get
+                    the best transport option recommendation.</div>
+            </div>
+        </section>
+
+        <section class="p-6 bg-gray-100 rounded shadow mt-6">
+            <h3 class="text-2xl font-semibold" data-translate="incident_report_title">⛓ Immutable Incident Reporting</h3>
+            <textarea id="reportInput" rows="4"
+                class="w-full p-3 border rounded mt-2"
+                placeholder="Report delay, breakdown, or incident..." data-translate="incident_placeholder"></textarea>
+            <button onclick="submitImmutableReport()"
+                class="mt-3 bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700" data-translate="submit_report_btn">Submit
+                Report</button>
+            <div id="reportChain"
+                class="mt-6 max-h-96 overflow-y-auto bg-white p-4 rounded shadow"></div>
+        </section>
+
+        <footer class="mt-10 mb-16 text-sm text-gray-600">
+            <div class="max-w-7xl mx-auto" data-translate="footer_text">Made with ❤ — SmartTransit Prototype</div>
+        </footer>
+    </main>
+
+    <div id="routeMapModal" class="hidden fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-2xl w-11/12 h-5/6 p-4 relative flex flex-col overflow-hidden">
+            <button id="closeMapBtn" class="absolute top-4 right-4 text-gray-700 hover:text-black text-3xl font-bold z-10">&times;</button>
+            <h2 class="text-2xl font-bold text-center mb-2 flex-shrink-0" data-translate="punjab_bus_map_title">Punjab Bus Route Map</h2>
+            <div class="flex-grow relative border rounded-lg bg-gray-50" id="routeMapContainer">
+                <svg id="routeMapSvg" width="100%" height="100%" style="cursor: grab;"></svg>
+            </div>
+            <div id="routeMapLegend" class="flex-shrink-0 flex flex-wrap justify-center gap-x-6 gap-y-2 mt-2 p-2 bg-gray-100 rounded"></div>
+        </div>
+    </div>
+
+    <div id="chatbot-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-lg w-80 p-4 relative">
+            <h3 class="text-xl font-bold text-blue-600 mb-2" data-translate="chatbot_title">Mr. Conductor</h3>
+            <div id="chat-output" class="h-60 overflow-y-auto border p-2 mb-2 bg-gray-100 rounded"></div>
+            <input type="text" id="chat-input" placeholder="Ask something..." class="w-full p-2 border rounded" data-translate="chatbot_placeholder"/>
+            <button onclick="handleChat()" class="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700" data-translate="send_btn">Send</button>
+            <button onclick="toggleChatbot()" class="absolute top-2 right-2 text-gray-600 hover:text-gray-900">✖</button>
+        </div>
+    </div>
+
+    <div id="bookingModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-lg w-auto p-6 relative text-center">
+            <h3 class="text-xl font-bold text-blue-600 mb-4" data-translate="confirm_boarding_pass">Confirm Your Boarding Pass</h3>
+            <div id="boarding-pass-details" class="p-4 bg-gray-100 rounded-lg"></div>
+            <button id="confirmBooking" class="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700" data-translate="get_pass">Get Pass</button>
+            <button id="closeBookingModal" class="absolute top-2 right-2 text-gray-600 hover:text-gray-900 text-2xl">&times;</button>
+        </div>
+    </div>
+
+    <div id="bookingsDetailsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-lg w-1/3 p-6 relative">
+            <h3 id="bookingDetailsTitle" class="text-2xl font-bold text-blue-600 mb-4">Your Bookings</h3>
+            <div id="bookingDetailsContent" class="space-y-4">
+                </div>
+            <button id="closeBookingsDetailsModal" class="absolute top-2 right-2 text-gray-600 hover:text-gray-900 text-2xl">&times;</button>
+        </div>
+    </div>
+
+    <div id="helpModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-lg w-1/2 p-6 relative max-h-[80vh] flex flex-col">
+            <h3 class="text-2xl font-bold text-blue-600 mb-4" data-translate="help_center">Help Center</h3>
+            <div id="faq-section" class="overflow-y-auto"></div>
+            <button id="closeHelpModal" class="absolute top-2 right-2 text-gray-600 hover:text-gray-900 text-2xl">&times;</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Translations and language selector
+        const translations = {
+            en: {
+                route_map_link: "🗺️ Route Map",
+                punjab_bus_map_title: "Punjab Bus Route Map",
+                chat_btn: "💬 Chat",
+                main_title: "🚏 SmartTransit",
+                main_subtitle: "Real-time Public Transport Tracking & Smart ETA Prediction. Making urban mobility smarter, faster, and more reliable.",
+                explore_app_btn: "Explore the App",
+                live_map_title: "📍 Live Map with Vehicles & Bus Stops",
+                refresh_location_btn: "Refresh My Location",
+                where_is_my_bus_title: "🔍 Where is my Bus?",
+                by_route_tab: "By Route",
+                by_bus_number_tab: "By Bus Number",
+                from_label: "From",
+                from_placeholder: "e.g., Kadgil",
+                to_label: "To",
+                to_placeholder: "e.g., Tarn Taran Bus Stand",
+                find_buses_btn: "Find Buses",
+                bus_number_label: "Bus Number",
+                bus_number_placeholder: "e.g., 58",
+                track_bus_btn: "Track Bus",
+                recent_searches_title: "Recent Searches",
+                search_history_placeholder: "Your search history will appear here.",
+                predictive_eta_title: "🧠 Predictive ETA",
+                start_location_label: "Start Location:",
+                destination_label: "Destination:",
+                to_kashmere_placeholder: "e.g., Tarn Taran Bus Stand",
+                predict_eta_btn: "Predict ETA",
+                prediction_placeholder: "Prediction will appear here...",
+                route_planner_title: "🗺 Smart Route Planner",
+                find_best_route_btn: "Find Best Route",
+                route_reco_placeholder: "Enter locations to get the best transport option recommendation.",
+                incident_report_title: "⛓ Immutable Incident Reporting",
+                incident_placeholder: "Report delay, breakdown, or incident...",
+                submit_report_btn: "Submit Report",
+                chatbot_title: "Mr. Conductor",
+                chatbot_placeholder: "Ask something...",
+                send_btn: "Send",
+                main_heading: "India's No.1 bus tracking & booking experience",
+                main_subheading: "Real-time vehicle locations, smart ETA predictions and easy route planning — all in one place.",
+                search_buses: "🔍 Search buses",
+                festive_offer: "Book trains for festivals",
+                offer_code: "Get ₹100 off using code FESTIVE",
+                punjab_bookings: "25,000+ people booked from Punjab last month",
+                refresh_vehicles_btn: "Refresh Vehicles",
+                footer_text: "Made with ❤ — SmartTransit Prototype",
+                confirm_boarding_pass: "Confirm Your Boarding Pass",
+                get_pass: "Get Pass",
+                help_center: "Help Center",
+            },
+            hi: {
+                route_map_link: "🗺️ मार्ग नक्शा",
+                punjab_bus_map_title: "पंजाब बस मार्ग नक्शा",
+                chat_btn: "💬 चैट",
+                main_title: "🚏 स्मार्टट्रांजिट",
+                main_subtitle: "वास्तविक समय सार्वजनिक परिवहन ट्रैकिंग और स्मार्ट ईटीए भविष्यवाणी। शहरी गतिशीलता को होशियार, तेज और अधिक विश्वसनीय बनाना।",
+                explore_app_btn: "ऐप का अन्वेषण करें",
+                live_map_title: "📍 वाहनों और बस स्टॉप के साथ लाइव नक्शा",
+                refresh_location_btn: "मेरा स्थान ताज़ा करें",
+                where_is_my_bus_title: " मेरी बस कहाँ है?",
+                by_route_tab: "मार्ग से",
+                by_bus_number_tab: "बस नंबर से",
+                from_label: "से",
+                from_placeholder: "उदा., कडगिल",
+                to_label: "तक",
+                to_placeholder: "उदा., तरनतारन बस स्टैंड",
+                find_buses_btn: "बसें खोजें",
+                bus_number_label: "बस नंबर",
+                bus_number_placeholder: "उदा., 58",
+                track_bus_btn: "बस ट्रैक करें",
+                recent_searches_title: "हाल की खोजें",
+                search_history_placeholder: "आपकी खोज इतिहास यहाँ दिखाई देगा।",
+                predictive_eta_title: "🧠 भविष्य कहनेवाला ईटीए",
+                start_location_label: "आरंभ स्थान:",
+                destination_label: "गंतव्य:",
+                to_kashmere_placeholder: "उदा., तरनतारन बस स्टैंड",
+                predict_eta_btn: "ईटीए की भविष्यवाणी करें",
+                prediction_placeholder: "भविष्यवाणी यहाँ दिखाई देगी...",
+                route_planner_title: "🗺 स्मार्ट मार्ग योजनाकार",
+                find_best_route_btn: "सबसे अच्छा मार्ग खोजें",
+                route_reco_placeholder: "सर्वोत्तम परिवहन विकल्प की सिफारिश प्राप्त करने के लिए स्थान दर्ज करें।",
+                incident_report_title: "⛓ अपरिवर्तनीय घटना रिपोर्टिंग",
+                incident_placeholder: "देरी, टूटने, या घटना की रिपोर्ट करें...",
+                submit_report_btn: "रिपोर्ट सबमिट करें",
+                chatbot_title: "श्री कंडक्टर",
+                chatbot_placeholder: "कुछ पूछें...",
+                send_btn: "भेजें",
+                main_heading: "भारत का नंबर 1 बस ट्रैकिंग और बुकिंग अनुभव",
+                main_subheading: "वास्तविक समय वाहन स्थान, स्मार्ट ईटीए भविष्यवाणियां और आसान मार्ग योजना - सब एक ही स्थान पर।",
+                search_buses: "🔍 बसें खोजें",
+                festive_offer: "त्योहारों के लिए ट्रेन बुक करें",
+                offer_code: "FESTIVE कोड का उपयोग करके ₹100 की छूट प्राप्त करें",
+                punjab_bookings: "पिछले महीने पंजाब से 25,000 से अधिक लोगों ने बुकिंग की",
+                refresh_vehicles_btn: "वाहनों को ताज़ा करें",
+                footer_text: "❤ के साथ बनाया गया - स्मार्टट्रांजिट प्रोटोटाइप",
+                confirm_boarding_pass: "अपना बोर्डिंग पास कन्फर्म करें",
+                get_pass: "पास प्राप्त करें",
+                help_center: "सहायता केंद्र",
+            },
+            pa: {
+                route_map_link: "🗺️ ਰੂਟ ਦਾ ਨਕਸ਼ਾ",
+                punjab_bus_map_title: "ਪੰਜਾਬ ਬੱਸ ਰੂਟ ਦਾ ਨਕਸ਼ਾ",
+                chat_btn: "💬 ਗੱਲਬਾਤ",
+                main_title: "🚏 ਸਮਾਰਟ ਟ੍ਰਾਂਜ਼ਿਟ",
+                main_subtitle: "ਰੀਅਲ-ਟਾਈਮ ਪਬਲਿਕ ਟ੍ਰਾਂਸਪੋਰਟ ਟ੍ਰੈਕਿੰਗ ਅਤੇ ਸਮਾਰਟ ਈਟੀਏ ਭਵਿੱਖਬਾਣੀ। ਸ਼ਹਿਰੀ ਗਤੀਸ਼ੀਲਤਾ ਨੂੰ ਚੁਸਤ, ਤੇਜ਼ ਅਤੇ ਵਧੇਰੇ ਭਰੋਸੇਮੰਦ ਬਣਾਉਣਾ।",
+                explore_app_btn: "ਐਪ ਦੀ ਪੜਚੋਲ ਕਰੋ",
+                live_map_title: "📍 ਵਾਹਨਾਂ ਅਤੇ ਬੱਸ ਅੱਡਿਆਂ ਦੇ ਨਾਲ ਲਾਈਵ ਨਕਸ਼ਾ",
+                refresh_location_btn: "ਮੇਰਾ ਟਿਕਾਣਾ ਤਾਜ਼ਾ ਕਰੋ",
+                where_is_my_bus_title: "🔍 ਮੇਰੀ ਬੱਸ ਕਿੱਥੇ ਹੈ?",
+                by_route_tab: "ਰੂਟ ਦੁਆਰਾ",
+                by_bus_number_tab: "ਬੱਸ ਨੰਬਰ ਦੁਆਰਾ",
+                from_label: "ਤੋਂ",
+                from_placeholder: "ਉਦਾਹਰਨ, ਕਡਗਿਲ",
+                to_label: "ਨੂੰ",
+                to_placeholder: "ਉਦਾਹਰਨ, ਤਰਨਤਾਰਨ ਬੱਸ ਸਟੈਂਡ",
+                find_buses_btn: "ਬੱਸਾਂ ਲੱਭੋ",
+                bus_number_label: "ਬੱਸ ਨੰਬਰ",
+                bus_number_placeholder: "ਉਦਾਹਰਨ, 58",
+                track_bus_btn: "ਬੱਸ ਨੂੰ ਟਰੈਕ ਕਰੋ",
+                recent_searches_title: "ਹਾਲੀਆ ਖੋਜਾਂ",
+                search_history_placeholder: "ਤੁਹਾਡਾ ਖੋਜ ਇਤਿਹਾਸ ਇੱਥੇ ਦਿਖਾਈ ਦੇਵੇਗਾ।",
+                predictive_eta_title: "🧠 ਭਵਿੱਖਬਾਣੀ ਈ.ਟੀ.ਏ.",
+                start_location_label: "ਸ਼ੁਰੂਆਤੀ ਸਥਾਨ:",
+                destination_label: "ਮੰਜ਼ਿਲ:",
+                to_kashmere_placeholder: "ਉਦਾਹਰਨ, ਤਰਨਤਾਰਨ ਬੱਸ ਸਟੈਂਡ",
+                predict_eta_btn: "ਈਟੀਏ ਦੀ ਭਵਿੱਖਬਾਣੀ ਕਰੋ",
+                prediction_placeholder: "ਭਵਿੱਖਬਾਣੀ ਇੱਥੇ ਦਿਖਾਈ ਦੇਵੇਗੀ...",
+                route_planner_title: "🗺 ਸਮਾਰਟ ਰੂਟ ਯੋਜਨਾਕਾਰ",
+                find_best_route_btn: "ਵਧੀਆ ਰਸਤਾ ਲੱਭੋ",
+                route_reco_placeholder: "ਸਭ ਤੋਂ ਵਧੀਆ ਆਵਾਜਾਈ ਵਿਕਲਪ ਦੀ ਸਿਫ਼ਾਰਸ਼ ਪ੍ਰਾਪਤ ਕਰਨ ਲਈ ਸਥਾਨ ਦਾਖਲ ਕਰੋ।",
+                incident_report_title: "⛓ ਅਟੱਲ ਘਟਨਾ ਦੀ ਰਿਪੋਰਟਿੰਗ",
+                incident_placeholder: "ਦੇਰੀ, ਟੁੱਟਣ, ਜਾਂ ਘਟਨਾ ਦੀ ਰਿਪੋਰਟ ਕਰੋ...",
+                submit_report_btn: "ਰਿਪੋਰਟ ਦਰਜ ਕਰੋ",
+                chatbot_title: "ਸ਼੍ਰੀਮਾਨ ਕੰਡਕਟਰ",
+                chatbot_placeholder: "ਕੁਝ ਪੁੱਛੋ...",
+                send_btn: "ਭੇਜੋ",
+                main_heading: "ਭਾਰਤ ਦਾ ਨੰਬਰ 1 ਬੱਸ ਟਰੈਕਿੰਗ ਅਤੇ ਬੁਕਿੰਗ ਅਨੁਭਵ",
+                main_subheading: "ਰੀਅਲ-ਟਾਈਮ ਵਾਹਨ ਸਥਾਨ, ਸਮਾਰਟ ਈਟੀਏ ਭਵਿੱਖਬਾਣੀਆਂ ਅਤੇ ਆਸਾਨ ਰੂਟ ਦੀ ਯੋਜਨਾਬੰਦੀ - ਸਭ ਇੱਕ ਥਾਂ 'ਤੇ।",
+                search_buses: "🔍 ਬੱਸਾਂ ਦੀ ਖੋਜ ਕਰੋ",
+                festive_offer: "ਤਿਉਹਾਰਾਂ ਲਈ ਰੇਲ ਗੱਡੀਆਂ ਬੁੱਕ ਕਰੋ",
+                offer_code: "FESTIVE ਕੋਡ ਦੀ ਵਰਤੋਂ ਕਰਕੇ ₹100 ਦੀ ਛੋਟ ਪ੍ਰਾਪਤ ਕਰੋ",
+                punjab_bookings: "ਪਿਛਲੇ ਮਹੀਨੇ ਪੰਜਾਬ ਤੋਂ 25,000+ ਲੋਕਾਂ ਨੇ ਬੁੱਕ ਕੀਤਾ",
+                refresh_vehicles_btn: "ਵਾਹਨ ਤਾਜ਼ਾ ਕਰੋ",
+                footer_text: "❤ ਨਾਲ ਬਣਾਇਆ ਗਿਆ — ਸਮਾਰਟ ਟ੍ਰਾਂਜ਼ਿਟ ਪ੍ਰੋਟੋਟਾਈਪ",
+                confirm_boarding_pass: "ਆਪਣੇ ਬੋਰਡਿੰਗ ਪਾਸ ਦੀ ਪੁਸ਼ਟੀ ਕਰੋ",
+                get_pass: "ਪਾਸ ਪ੍ਰਾਪਤ ਕਰੋ",
+                help_center: "ਸਹਾਇਤਾ ਕੇਂਦਰ",
+            }
+        };
+
+        function setLanguage(lang) {
+            document.querySelectorAll('[data-translate]').forEach(element => {
+                const key = element.getAttribute('data-translate');
+                if (translations[lang] && translations[lang][key]) {
+                    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+                        element.placeholder = translations[lang][key];
+                    } else {
+                        element.innerText = translations[lang][key];
+                    }
+                }
+            });
+        }
+        
+        document.getElementById('language-selector').addEventListener('change', (event) => {
+            setLanguage(event.target.value);
+        });
+
+        const gtfsStops = {};
+        const gtfsRoutes = [];
+        const gtfsBuses = [];
+
+        function loadBusData() {
+            const jsonData = {
+                "58": [
+                    {"stop_id": 5801, "stop_name": "Kadgil", "lat": 31.4581, "lon": 74.9252, "arrival_time": "08:00:00", "departure_time": "08:00:00"},
+                    {"stop_id": 5802, "stop_name": "Baghrian", "lat": 31.4709, "lon": 74.9402, "arrival_time": "08:10:00", "departure_time": "08:10:00"},
+                    {"stop_id": 5803, "stop_name": "Jalal", "lat": 31.4821, "lon": 74.9605, "arrival_time": "08:18:00", "departure_time": "08:18:00"},
+                    {"stop_id": 5804, "stop_name": "Hakam Singh Wala", "lat": 31.4938, "lon": 74.9756, "arrival_time": "08:25:00", "departure_time": "08:25:00"},
+                    {"stop_id": 5805, "stop_name": "Tarn Taran Bus Stand", "lat": 31.4512, "lon": 74.9271, "arrival_time": "08:40:00", "departure_time": "08:40:00"}
+                ],
+                "60": [
+                    {"stop_id": 6001, "stop_name": "Bathinda Bus Stand", "lat": 30.2110, "lon": 74.9455, "arrival_time": "09:00:00", "departure_time": "09:00:00"},
+                    {"stop_id": 6002, "stop_name": "Talwandi Sabo Road Crossing", "lat": 30.2364, "lon": 75.0462, "arrival_time": "09:12:00", "departure_time": "09:12:00"},
+                    {"stop_id": 6003, "stop_name": "Gill Khooh", "lat": 30.2529, "lon": 75.0658, "arrival_time": "09:20:00", "departure_time": "09:20:00"},
+                    {"stop_id": 6004, "stop_name": "Takhat Sahib", "lat": 30.2598, "lon": 75.0783, "arrival_time": "09:28:00", "departure_time": "09:28:00"},
+                    {"stop_id": 6005, "stop_name": "Talwandi Sabo Bus Stand", "lat": 30.2611, "lon": 75.0867, "arrival_time": "09:35:00", "departure_time": "09:35:00"}
+                ],
+                "65": [
+                    {"stop_id": 6501, "stop_name": "Raman Mandi", "lat": 29.9694, "lon": 75.1011, "arrival_time": "10:00:00", "departure_time": "10:00:00"},
+                    {"stop_id": 6502, "stop_name": "Jassi Baghwali", "lat": 29.9810, "lon": 75.1211, "arrival_time": "10:08:00", "departure_time": "10:08:00"},
+                    {"stop_id": 6503, "stop_name": "Ganga Village", "lat": 29.9948, "lon": 75.1455, "arrival_time": "10:16:00", "departure_time": "10:16:00"},
+                    {"stop_id": 6504, "stop_name": "Ramsara", "lat": 30.0055, "lon": 75.1687, "arrival_time": "10:25:00", "departure_time": "10:25:00"}
+                ]
+            };
+            for (const routeId in jsonData) {
+                const routeData = jsonData[routeId];
+                if (routeData.length > 0) {
+                    const routeStops = [];
+                    routeData.forEach(stop => {
+                        const stopKey = `s${stop.stop_id}`;
+                        if (!gtfsStops[stopKey]) {
+                            gtfsStops[stopKey] = {
+                                name: stop.stop_name,
+                                lat: stop.lat,
+                                lon: stop.lon
+                            };
+                        }
+                        routeStops.push({ stopId: stopKey, arrival_time: stop.arrival_time, departure_time: stop.departure_time });
+                    });
+
+                    gtfsRoutes.push({
+                        id: routeId,
+                        name: `${routeData[0].stop_name} to ${routeData[routeData.length - 1].stop_name}`,
+                        schedule: routeStops
+                    });
+
+                    // Simulate some buses for each route
+                    for (let i = 0; i < 2; i++) {
+                        gtfsBuses.push({
+                            id: `PB03N${Math.floor(Math.random() * 9000) + 1000}`,
+                            routeId: routeId,
+                            currentStopIndex: Math.floor(Math.random() * routeStops.length),
+                        });
+                    }
+                }
+            }
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(pos => initMap(pos.coords.latitude, pos.coords.longitude), () => initMap());
+            } else initMap();
+            simulateBusMovement();
+        }
+        
+        let map, userMarker, db;
+        let vehicleMarkers = [];
+        let reportChain = [];
+
+        function initMap(lat = 30.90, lng = 75.85) { // Default coordinates for Punjab (Ludhiana)
+            map = L.map('map').setView([lat, lng], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: 'Map data © OpenStreetMap contributors'
+            }).addTo(map);
+            userMarker = L.marker([lat, lng], { icon: new L.Icon({
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41]
+            }) }).addTo(map).bindPopup('You are here').openPopup();
+            updateVehicleMarkers();
+        }
+
+        function updateVehicleMarkers() {
+            vehicleMarkers.forEach(m => map.removeLayer(m));
+            vehicleMarkers = [];
+            gtfsBuses.forEach(bus => {
+                const route = gtfsRoutes.find(r => r.id === bus.routeId);
+                if (!route || !route.schedule[bus.currentStopIndex]) return;
+                const stopInfo = route.schedule[bus.currentStopIndex];
+                const stop = gtfsStops[stopInfo.stopId];
+                
+                let lat = stop.lat;
+                let lon = stop.lon;
+                if (bus.currentStopIndex + 1 < route.schedule.length) {
+                    const nextStop = gtfsStops[route.schedule[bus.currentStopIndex + 1].stopId];
+                    lat = stop.lat + (nextStop.lat - stop.lat) * 0.5;
+                    lon = stop.lon + (nextStop.lon - stop.lon) * 0.5;
+                }
+                
+                const marker = L.marker([lat, lon], { icon: new L.Icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41]
+                }) }).addTo(map)
+                    .bindPopup(`<strong>Bus:</strong> ${bus.id}<br/><strong>Route:</strong> ${route.id}<br/><strong>Next Stop:</strong> ${stop.name}`);
+                vehicleMarkers.push(marker);
+            });
+        }
+
+        function refreshLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(pos => {
+                    const lat = pos.coords.latitude, lng = pos.coords.longitude;
+                    userMarker.setLatLng([lat, lng]).bindPopup('You are here').openPopup();
+                    map.setView([lat, lng], 14, { animate: true });
+                }, () => alert('Location not available. Using default location.'));
+            }
+        }
+
+        function calculatePredictiveETA() {
+            const start = document.getElementById('etaStartLocation').value.trim();
+            const end = document.getElementById('etaEndLocation').value.trim();
+            const resultEl = document.getElementById('predictiveEtaResult');
+
+            if (!start || !end) {
+                resultEl.innerHTML = `<p class="text-red-600">Please enter a start and end location.</p>`;
+                return;
+            }
+
+            const route = gtfsRoutes.find(r => {
+                const startIndex = r.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(start.toLowerCase()));
+                const endIndex = r.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(end.toLowerCase()));
+                return startIndex !== -1 && endIndex !== -1 && startIndex < endIndex;
+            });
+
+            if (!route) {
+                resultEl.innerHTML = `<p class="text-red-600">No direct bus route found for this journey.</p>`;
+                return;
+            }
+
+            const startIndex = route.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(start.toLowerCase()));
+            const endIndex = route.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(end.toLowerCase()));
+            
+            const numStops = endIndex - startIndex;
+            const baseTimePerStop = 3; 
+            const scheduledDuration = numStops * baseTimePerStop;
+            
+            // Assume an average traffic level for calculation instead of user input
+            const AVERAGE_TRAFFIC_FACTOR = 5; // Simulating average traffic on a scale of 1-10
+            const trafficDelay = numStops * (AVERAGE_TRAFFIC_FACTOR * 0.25); 
+            const predictedEta = scheduledDuration + trafficDelay;
+
+            resultEl.innerHTML = `
+                <p><strong>Stops to travel:</strong> ${numStops}</p>
+                <p><strong>Predicted ETA (avg. traffic):</strong> ${predictedEta.toFixed(1)} minutes</p>
+                <p class="text-sm text-gray-600">On route: ${route.name}</p>
+            `;
+        }
+
+        function findBestRoute() {
+            const start = document.getElementById('startLocationPlanner').value.trim();
+            const end = document.getElementById('endLocationPlanner').value.trim();
+            const resultEl = document.getElementById('routeRecommendation');
+
+            if (!start || !end) { 
+                resultEl.innerHTML = `<p class="text-red-600">Please enter start and destination.</p>`;
+                return; 
+            }
+
+            const matchingRoutes = gtfsRoutes.filter(route => {
+                const startIndex = route.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(start.toLowerCase()));
+                const endIndex = route.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(end.toLowerCase()));
+                return startIndex !== -1 && endIndex !== -1 && startIndex < endIndex;
+            });
+            
+            if (matchingRoutes.length > 0) {
+                    let recommendations = matchingRoutes.map(route => {
+                            return `<div class="mb-2">
+                                        <p>🚀 <strong>Best Option: Bus</strong></p>
+                                        <p><strong>Route:</strong> ${route.name} (${route.id})</p>
+                                    </div>`;
+            }).join('');
+                resultEl.innerHTML = recommendations;
+            } else {
+                resultEl.innerHTML = `
+                    <p>No direct bus route found.</p>
+                    <p class="text-sm text-gray-600">Consider alternative transport like Auto or Metro.</p>
+                `;
+            }
+        }
+
+        function submitImmutableReport() {
+            const report = document.getElementById('reportInput').value.trim();
+            if (!report) { alert('Enter report'); return; }
+            const prev = reportChain.length ? reportChain[reportChain.length - 1].hash : 'GENESIS';
+            const ts = new Date().toISOString();
+            const hash = CryptoJS.SHA256(`${prev}|${ts}|${report}`).toString();
+            reportChain.push({ previousHash: prev, timestamp: ts, report, hash });
+            displayReportChain();
+            document.getElementById('reportInput').value = '';
+        }
+
+        function displayReportChain() {
+            document.getElementById('reportChain').innerHTML = reportChain.map(b => `
+                <div class="p-2 bg-white rounded shadow mb-2">
+                    <p><strong>Timestamp:</strong> ${b.timestamp}</p>
+                    <p><strong>Report:</strong> ${b.report}</p>
+                    <p><strong>Hash:</strong> ${b.hash.substring(0,20)}...</p>
+                    <p><strong>Previous Hash:</strong> ${b.previousHash.substring(0,20)}...</p>
+                </div>`).join('');
+        }
+        
+        const tabRoute = document.getElementById('tab-route');
+        const tabNumber = document.getElementById('tab-number');
+        const formRoute = document.getElementById('form-route');
+        const formNumber = document.getElementById('form-number');
+        const resultsDiv = document.getElementById('results');
+        const historyListDiv = document.getElementById('history-list');
+        let userId;
+
+        function switchTab(tab) {
+            if (tab === 'route') {
+                tabRoute.classList.add('bg-white', 'text-blue-600', 'shadow');
+                tabNumber.classList.remove('bg-white', 'text-blue-600', 'shadow');
+                formRoute.classList.remove('hidden');
+                formNumber.classList.add('hidden');
+            } else {
+                tabNumber.classList.add('bg-white', 'text-blue-600', 'shadow');
+                tabRoute.classList.remove('bg-white', 'text-blue-600', 'shadow');
+                formNumber.classList.remove('hidden');
+                formRoute.classList.add('hidden');
+            }
+        }
+
+        function generateTimelineHtml(bus, route) {
+            if (!bus || !route) return '';
+            return route.schedule.map((stopInfo, index) => {
+                const stop = gtfsStops[stopInfo.stopId];
+                const isPast = index < bus.currentStopIndex;
+                const isCurrent = index === bus.currentStopIndex;
+                let dotClass = isPast ? 'bg-green-500' : (isCurrent ? 'bg-blue-500 ring-4 ring-blue-200' : 'bg-gray-300');
+                let textClass = isPast ? 'text-gray-500 line-through' : (isCurrent ? 'text-blue-700 font-bold' : 'text-gray-800');
+                let timeStatus = isPast ? `Departed at ${stopInfo.departure_time}` : (isCurrent ? `Arrived at ${stopInfo.arrival_time}` : `Expected at ${stopInfo.arrival_time}`);
+
+                return `<div class="timeline-item relative pl-10 pb-10">
+                            <div class="timeline-dot absolute w-5 h-5 rounded-full ${dotClass}">
+                                ${isCurrent ? '<svg class="bus-icon text-white absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11C5.84 5 5.28 5.42 5.08 6.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5-1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>' : ''}
+                            </div>
+                            <div class="${textClass}"><p class="font-medium">${stop.name}</p><p class="text-sm"><span class="text-xs ml-2">${timeStatus}</span></p></div>
+                        </div>`;
+            }).join('');
+        }
+
+        function findBusesByRoute(start, end) {
+            let matchingRoutes = gtfsRoutes.filter(route => {
+                const startIndex = route.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(start.toLowerCase()));
+                const endIndex = route.schedule.findIndex(s => gtfsStops[s.stopId].name.toLowerCase().includes(end.toLowerCase()));
+                return startIndex !== -1 && endIndex !== -1 && startIndex < endIndex;
+            });
+
+            let busesToDisplay = [];
+            matchingRoutes.forEach(route => {
+                const busesOnRoute = gtfsBuses.filter(bus => bus.routeId === route.id);
+                busesToDisplay.push(...busesOnRoute);
+            });
+            
+            if (busesToDisplay.length === 0) {
+                resultsDiv.innerHTML = `<p class="text-center text-gray-500 p-4 bg-gray-50 rounded-lg">No direct buses found for this route.</p>`;
+                return;
+            }
+
+            let html = busesToDisplay.map(bus => {
+                const route = gtfsRoutes.find(r => r.id === bus.routeId);
+                const timelineHtml = generateTimelineHtml(bus, route);
+
+                return `<div class="bg-white border border-gray-200 rounded-lg shadow-sm p-4 mb-4">
+                            <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4 pb-4 border-b">
+                                <div>
+                                    <p class="font-bold text-xl text-blue-700">Bus Number: ${bus.id}</p>
+                                    <p class="text-md text-gray-600">Route: ${route.name}</p>
+                                </div>
+                            </div>
+                            <div>
+                                <h4 class="font-semibold text-lg mb-4 text-gray-800">Live Status & Route</h4>
+                                ${timelineHtml}
+                            </div>
+                        </div>`;
+            }).join('');
+            
+            html += `
+                <div class="mt-6 text-center">
+                    <button id="bookRouteTicketBtn" data-start="${start}" data-end="${end}" class="bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition text-lg">
+                        Get Boarding Pass for this Route
+                    </button>
+                </div>
+            `;
+
+            resultsDiv.innerHTML = html;
+            saveSearchHistory({ type: 'route', start, end });
+        }
+
+        function findBusByNumber(busId) {
+            const route = gtfsRoutes.find(r => r.id.toLowerCase() === busId.toLowerCase());
+            if (!route) {
+                resultsDiv.innerHTML = `<p class="text-center text-gray-500 p-4 bg-gray-50 rounded-lg">Route number not found.</p>`;
+                return;
+            }
+            
+            const busesOnRoute = gtfsBuses.filter(b => b.routeId === route.id);
+            if(busesOnRoute.length === 0){
+                resultsDiv.innerHTML = `<p class="text-center text-gray-500 p-4 bg-gray-50 rounded-lg">No active buses found on this route right now.</p>`;
+                return;
+            }
+
+            let html = busesOnRoute.map(bus => {
+                const timelineHtml = generateTimelineHtml(bus, route);
+                return `<div class="bg-white border border-gray-200 rounded-lg shadow-sm p-4 mb-4">
+                            <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4 pb-4 border-b">
+                                <div>
+                                    <p class="font-bold text-xl text-blue-700">Bus: ${bus.id}</p>
+                                    <p class="text-md text-gray-600">On Route ${route.name} (${route.id})</p>
+                                </div>
+                            </div>
+                            <div>${timelineHtml}</div>
+                        </div>`;
+            }).join('');
+            resultsDiv.innerHTML = html;
+            saveSearchHistory({ type: 'number', number: busId });
+        }
+        
+        async function saveSearchHistory(query) {
+                if (!userId || !db) return;
+                try {
+                    const historyCollection = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default'}/users/${userId}/searchHistory`);
+                    await addDoc(historyCollection, { ...query, timestamp: new Date() });
+                } catch (error) { console.error("Error saving history: ", error); }
+        }
+
+        function loadSearchHistory() {
+                if (!userId || !db) return;
+                const historyCollection = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default'}/users/${userId}/searchHistory`);
+                const q = query(historyCollection, orderBy('timestamp', 'desc'), limit(5));
+                onSnapshot(q, (snapshot) => {
+                        if (snapshot.empty) {
+                            historyListDiv.innerHTML = `<p class="text-center text-gray-500 text-sm" data-translate="search_history_placeholder">Your search history will appear here.</p>`;
+                            return;
+                        }
+                        let historyHtml = '';
+                        const uniqueSearches = new Map();
+                        snapshot.docs.forEach(doc => {
+                            const data = doc.data();
+                            const key = data.type === 'route' ? `route-${data.start}-${data.end}` : `number-${data.number}`;
+                            if (!uniqueSearches.has(key)) uniqueSearches.set(key, data);
+                        });
+                        uniqueSearches.forEach(data => {
+                            if (data.type === 'route') {
+                                    historyHtml += `<div class="bg-gray-50 p-3 rounded-lg flex items-center justify-between cursor-pointer history-item" data-type="route" data-start="${data.start}" data-end="${data.end}"><div><p class="font-medium text-sm">${data.start} → ${data.end}</p><p class="text-xs text-gray-500">Route Search</p></div><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>`;
+                            } else {
+                                    historyHtml += `<div class="bg-gray-50 p-3 rounded-lg flex items-center justify-between cursor-pointer history-item" data-type="number" data-number="${data.number}"><div><p class="font-medium text-sm">Route ${data.number}</p><p class="text-xs text-gray-500">Route Number Search</p></div><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>`;
+                            }
+                        });
+                        historyListDiv.innerHTML = historyHtml;
+                });
+        }
+        
+        function handleHistoryClick(e) {
+            const item = e.target.closest('.history-item');
+            if (!item) return;
+            const { type, start, end, number } = item.dataset;
+            if (type === 'route') {
+                document.getElementById('start-point').value = start;
+                document.getElementById('destination').value = end;
+                switchTab('route');
+                findBusesByRoute(start, end);
+            } else {
+                document.getElementById('bus-number').value = number;
+                switchTab('number');
+                findBusByNumber(number);
+            }
+                window.scrollTo({ top: document.getElementById('mainContent').offsetTop, behavior: 'smooth' });
+        }
+
+        function simulateBusMovement() {
+            setInterval(() => {
+                gtfsBuses.forEach(bus => {
+                    const route = gtfsRoutes.find(r => r.id === bus.routeId);
+                    if (route) {
+                        bus.currentStopIndex = (bus.currentStopIndex + 1) % route.schedule.length;
+                    }
+                });
+                if(map) {
+                    updateVehicleMarkers();
+                }
+            }, 15000);
+        }
+        
+        function toggleChatbot() {
+            document.getElementById('chatbot-modal').classList.toggle('hidden');
+        }
+
+        async function handleChat() {
+            const inputEl = document.getElementById('chat-input');
+            const outputEl = document.getElementById('chat-output');
+            const userMessage = inputEl.value.trim();
+            if (!userMessage) return;
+
+            outputEl.innerHTML += `<div class="text-right text-blue-800 my-1"><strong>You:</strong> ${userMessage}</div>`;
+            inputEl.value = '';
+            outputEl.scrollTop = outputEl.scrollHeight;
+
+            const thinkingEl = document.createElement('div');
+            thinkingEl.classList.add('text-left', 'text-gray-800', 'my-1');
+            thinkingEl.innerHTML = `<strong>Mr. Conductor:</strong> Thinking...`;
+            outputEl.appendChild(thinkingEl);
+            outputEl.scrollTop = outputEl.scrollHeight;
+            
+            const systemPrompt = `You are Mr. Conductor, a friendly and helpful bus transit assistant for the Punjab area. Your goal is to answer user questions about bus routes, stops, and schedules. You must ONLY use the data provided below to answer questions. If the information is not in the data, say you don't have that information. Do not make anything up. Also handle basic greetings and tasks.
+
+            Here is the available bus data:
+            Stops: ${JSON.stringify(gtfsStops)}
+            Routes and Schedules: ${JSON.stringify(gtfsRoutes)}
+            Live Bus Locations: ${JSON.stringify(gtfsBuses)}
+            `;
+
+            const apiKey = "AIzaSyC3WTm_zDImF76rxfwoR1HsRGH6xtdLGHg"; // IMPORTANT: ADD YOUR GOOGLE AI API KEY HERE
+            if (!apiKey) {
+                thinkingEl.innerHTML = `<strong>Mr. Conductor:</strong> Sorry, my API key is missing. The developer needs to add it to the script.`;
+                outputEl.scrollTop = outputEl.scrollHeight;
+                return;
+            }
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userMessage }] }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    throw new Error(`API request failed with status ${response.status}`);
+                }
+                const result = await response.json();
+                
+                let botReply = "Sorry, I had trouble finding an answer. Please try again.";
+                if (result.candidates && result.candidates[0].content && result.candidates[0].content.parts[0].text) {
+                    botReply = result.candidates[0].content.parts[0].text;
+                }
+                thinkingEl.innerHTML = `<strong>Mr. Conductor:</strong> ${botReply}`;
+
+            } catch(error) {
+                console.error("Chat API Error:", error);
+                thinkingEl.innerHTML = `<strong>Mr. Conductor:</strong> Sorry, I'm having trouble connecting right now. Please check the API key and try again.`;
+            }
+
+            outputEl.scrollTop = outputEl.scrollHeight;
+        }
+        
+        function generateRouteMap() {
+            const svgNS = "http://www.w3.org/2000/svg";
+            const svg = document.getElementById('routeMapSvg');
+            const legend = document.getElementById('routeMapLegend');
+            svg.innerHTML = '';
+            legend.innerHTML = '';
+
+            const routeColors = { '58': '#e50025', '60': '#0057e7', '65': '#50C878' };
+            const stopPositions = {}; // Tracks the first drawn position of any stop { stopId: {x, y, routeColor} }
+            const allElementsGroup = document.createElementNS(svgNS, 'g');
+            svg.appendChild(allElementsGroup);
+
+            let currentX = 150; // Start X for the first route column
+            const routesToDisplay = gtfsRoutes.slice(0, 4); 
+
+            routesToDisplay.forEach(route => {
+                legend.innerHTML += `<div class="flex items-center"><span class="w-4 h-4 mr-2 rounded-sm" style="background-color: ${routeColors[route.id] || '#333'};"></span><span class="font-semibold text-sm">${route.name} (${route.id})</span></div>`;
+            });
+
+            routesToDisplay.forEach(route => {
+                const routeColor = routeColors[route.id] || '#333';
+                const routeGroup = document.createElementNS(svgNS, 'g');
+                allElementsGroup.appendChild(routeGroup);
+
+                let currentY = 100;
+                const firstStopY = currentY;
+
+                const mainLine = document.createElementNS(svgNS, 'line');
+                mainLine.setAttribute('x1', currentX);
+                mainLine.setAttribute('y1', firstStopY);
+                mainLine.setAttribute('x2', currentX);
+                const lastStopY = firstStopY + (route.schedule.length - 1) * 80;
+                mainLine.setAttribute('y2', lastStopY);
+                mainLine.setAttribute('stroke', routeColor);
+                mainLine.setAttribute('stroke-width', 6);
+                mainLine.setAttribute('stroke-linecap', 'round');
+                routeGroup.appendChild(mainLine);
+
+                route.schedule.forEach(stopInfo => {
+                    const stopId = stopInfo.stopId;
+                    const stop = gtfsStops[stopId];
+
+                    if (!stopPositions[stopId]) { 
+                        stopPositions[stopId] = { x: currentX, y: currentY, routeColor: routeColor };
+
+                        const circle = document.createElementNS(svgNS, 'circle');
+                        circle.setAttribute('cx', currentX);
+                        circle.setAttribute('cy', currentY);
+                        circle.setAttribute('r', 8);
+                        circle.setAttribute('fill', 'white');
+                        circle.setAttribute('stroke', routeColor);
+                        circle.setAttribute('stroke-width', 4);
+                        routeGroup.appendChild(circle);
+
+                        const text = document.createElementNS(svgNS, 'text');
+                        text.setAttribute('x', currentX + 20);
+                        text.setAttribute('y', currentY);
+                        text.setAttribute('dy', '.35em');
+                        text.setAttribute('font-size', '14');
+                        text.setAttribute('font-family', 'sans-serif');
+                        text.textContent = stop.name;
+                        routeGroup.appendChild(text);
+
+                    } else { 
+                        const originalPos = stopPositions[stopId];
+
+                        const connectorLine = document.createElementNS(svgNS, 'line');
+                        connectorLine.setAttribute('x1', currentX);
+                        connectorLine.setAttribute('y1', currentY);
+                        connectorLine.setAttribute('x2', originalPos.x);
+                        connectorLine.setAttribute('y2', originalPos.y);
+                        connectorLine.setAttribute('stroke', '#888');
+                        connectorLine.setAttribute('stroke-width', 2);
+                        connectorLine.setAttribute('stroke-dasharray', '5,5');
+                        routeGroup.insertBefore(connectorLine, routeGroup.firstChild);
+
+                        const smallDot = document.createElementNS(svgNS, 'circle');
+                        smallDot.setAttribute('cx', currentX);
+                        smallDot.setAttribute('cy', currentY);
+                        smallDot.setAttribute('r', 5);
+                        smallDot.setAttribute('fill', routeColor);
+                        routeGroup.appendChild(smallDot);
+                        
+                        const originalCircle = allElementsGroup.querySelector(`circle[cx='${originalPos.x}'][cy='${originalPos.y}']`);
+                         if(originalCircle) {
+                           originalCircle.setAttribute('r', 10);
+                           originalCircle.setAttribute('stroke', '#000');
+                           originalCircle.setAttribute('fill', 'white');
+                         }
+                    }
+                    currentY += 80;
+                });
+                currentX += 250; 
+            });
+
+            try {
+                const padding = 50;
+                const bbox = allElementsGroup.getBBox();
+                svg.setAttribute('viewBox', `${bbox.x - padding} ${bbox.y - padding} ${bbox.width + padding*2} ${bbox.height + padding*2}`);
+            } catch (e) {
+                console.error("Could not get BBox of SVG, map might not display correctly.", e);
+            }
+
+            let isPanning = false, startPoint = {x: 0, y: 0}, viewBox = svg.viewBox.baseVal;
+            const getPoint = (e) => {
+                const CTM = svg.getScreenCTM();
+                let clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                let clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                return { x: (clientX - CTM.e) / CTM.a, y: (clientY - CTM.f) / CTM.d };
+            };
+            const startPan = (e) => {
+                isPanning = true;
+                startPoint = { x: e.clientX || (e.touches && e.touches[0].clientX), y: e.clientY || (e.touches && e.touches[0].clientY) };
+                svg.style.cursor = 'grabbing';
+            };
+            const doPan = (e) => {
+                if (!isPanning) return;
+                let clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                let clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                let dx = (startPoint.x - clientX) * (viewBox.width / svg.clientWidth);
+                let dy = (startPoint.y - clientY) * (viewBox.height / svg.clientHeight);
+                viewBox.x += dx;
+                viewBox.y += dy;
+                svg.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`);
+                startPoint = { x: clientX, y: clientY };
+            };
+            const stopPan = () => { if (isPanning) { isPanning = false; svg.style.cursor = 'grab'; }};
+            svg.addEventListener('mousedown', startPan);
+            svg.addEventListener('mousemove', doPan);
+            svg.addEventListener('mouseup', stopPan);
+            svg.addEventListener('mouseleave', stopPan);
+            svg.addEventListener('touchstart', startPan);
+            svg.addEventListener('touchmove', doPan);
+            svg.addEventListener('touchend', stopPan);
+
+            svg.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const zoomIntensity = 0.1;
+                const { x, y } = getPoint(e);
+                const dw = viewBox.width * Math.sign(e.deltaY) * zoomIntensity;
+                const dh = viewBox.height * Math.sign(e.deltaY) * zoomIntensity;
+                if ((viewBox.width - dw) < 100 || (viewBox.height - dh) < 100) return;
+                viewBox.x += dw * (x - viewBox.x) / viewBox.width;
+                viewBox.y += dh * (y - viewBox.y) / viewBox.height;
+                viewBox.width -= dw;
+                viewBox.height -= dh;
+                svg.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`);
+            });
+        }
+        
+        window.toggleChatbot = toggleChatbot;
+        window.refreshLocation = refreshLocation;
+        window.calculatePredictiveETA = calculatePredictiveETA;
+        window.findBestRoute = findBestRoute;
+        window.submitImmutableReport = submitImmutableReport;
+        window.handleChat = handleChat;
+        
+        try {
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "DEMO", authDomain: "DEMO", projectId: "DEMO" };
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            db = getFirestore(app);
+            
+            onAuthStateChanged(auth, user => {
+                if (user) {
+                    userId = user.uid;
+                    loadSearchHistory();
+                }
+            });
+
+            const signIn = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Firebase sign-in failed: ", error);
+                }
+            };
+            signIn();
+
+        } catch (e) {
+            console.error("Firebase initialization failed:", e);
+        }
+
+        tabRoute.addEventListener('click', () => switchTab('route'));
+        tabNumber.addEventListener('click', () => switchTab('number'));
+        document.getElementById('searchForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const from = document.getElementById('fromInput').value.trim();
+            const to = document.getElementById('toInput').value.trim();
+            const resultsSection = document.getElementById('mainContent');
+            findBusesByRoute(from, to);
+            resultsSection.scrollIntoView({ behavior: 'smooth' });
+        });
+        formRoute.addEventListener('submit', (e) => { e.preventDefault(); findBusesByRoute(document.getElementById('start-point').value.trim(), document.getElementById('destination').value.trim()); });
+        formNumber.addEventListener('submit', (e) => { e.preventDefault(); findBusByNumber(document.getElementById('bus-number').value.trim()); });
+        
+        resultsDiv.addEventListener('click', (e) => {
+            if (e.target && e.target.id === 'bookRouteTicketBtn') {
+                const start = e.target.dataset.start;
+                const end = e.target.dataset.end;
+                openBoardingPassModal(start, end);
+            }
+        });
+        historyListDiv.addEventListener('click', handleHistoryClick);
+
+        const routeMapModal = document.getElementById('routeMapModal');
+        document.getElementById('routeMapLink').addEventListener('click', (e) => {
+            e.preventDefault();
+            routeMapModal.classList.remove('hidden');
+            generateRouteMap();
+        });
+        document.getElementById('closeMapBtn').addEventListener('click', () => {
+            routeMapModal.classList.add('hidden');
+        });
+
+        // Booking Modal
+        const bookingModal = document.getElementById('bookingModal');
+        const closeBookingModal = document.getElementById('closeBookingModal');
+        const confirmBooking = document.getElementById('confirmBooking');
+        const bookingsDetailsModal = document.getElementById('bookingsDetailsModal');
+
+        function openBoardingPassModal(start, end) {
+            const detailsDiv = document.getElementById('boarding-pass-details');
+            detailsDiv.innerHTML = `
+                <p class="text-gray-800">You are about to book a universal boarding pass for the route:</p>
+                <p class="text-xl font-bold my-2 text-indigo-600">${start} &rarr; ${end}</p>
+                <p class="text-sm text-gray-600">This pass is valid for any bus operating on this route for today.</p>
+            `;
+            // Store details for the confirm button
+            confirmBooking.dataset.start = start;
+            confirmBooking.dataset.end = end;
+            bookingModal.classList.remove('hidden');
+        }
+        
+        closeBookingModal.addEventListener('click', () => {
+            bookingModal.classList.add('hidden');
+        });
+
+        confirmBooking.addEventListener('click', (e) => {
+            const start = e.target.dataset.start;
+            const end = e.target.dataset.end;
+            alert(`Boarding pass confirmed for the route: ${start} to ${end}.\n\nThis pass can be used on any bus on this route.`);
+            bookingModal.classList.add('hidden');
+        });
+
+        document.getElementById('bookingsLink').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('bookingsDropdown').classList.toggle('hidden');
+        });
+
+        document.getElementById('accountBtn').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('accountDropdown').classList.toggle('hidden');
+        });
+        
+        document.getElementById('yourBookings').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('bookingDetailsTitle').innerText = "Your Bookings";
+            document.getElementById('bookingDetailsContent').innerHTML = `<p>Route: Kadgil to Tarn Taran Bus Stand</p><p>Bus: Any</p><p>Pass Type: General Boarding</p>`;
+            bookingsDetailsModal.classList.remove('hidden');
+        });
+
+        document.getElementById('previousBookings').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('bookingDetailsTitle').innerText = "Previous Bookings";
+            document.getElementById('bookingDetailsContent').innerHTML = `<p>Route: Bathinda Bus Stand to Talwandi Sabo Bus Stand</p><p>Bus: Any</p><p>Pass Type: General Boarding</p>`;
+            bookingsDetailsModal.classList.remove('hidden');
+        });
+
+        document.getElementById('closeBookingsDetailsModal').addEventListener('click', () => {
+            bookingsDetailsModal.classList.add('hidden');
+        });
+
+
+        // Help Modal
+        const helpModal = document.getElementById('helpModal');
+        const closeHelpModal = document.getElementById('closeHelpModal');
+        const faqSection = document.getElementById('faq-section');
+
+        const faqs = [
+            { q: "How do I search for a bus?", a: "You can search for a bus using two methods. Use the main search bar on the homepage to search by 'From' and 'To' locations. Alternatively, in the 'Where is my Bus?' section, you can search by route or by bus number for more specific results." },
+            { q: "How does the live map work?", a: "The live map shows the real-time location of buses and bus stops. Your location is marked with a blue pin, and buses are marked with red pins. You can refresh the locations at any time using the buttons below the map." },
+            { q: "How do I book a ticket?", a: "After searching for a route, a 'Get Boarding Pass' button will appear. Click it to open a confirmation pop-up. This pass allows you to board any bus on that specific route." },
+            { q: "How can I check my past bookings?", a: "Click on the 'Bookings' link in the top navigation bar, and then select 'Previous Bookings' from the dropdown menu. A pop-up will display a list of your past journeys." },
+            { q: "How is the Predictive ETA calculated?", a: "Our Predictive ETA uses a smart algorithm that considers the number of stops, the base travel time, and average traffic conditions to give you an accurate estimate of your journey's duration." },
+            { q: "What is the Smart Route Planner?", a: "The Smart Route Planner helps you find the best bus route between two locations. Simply enter your start and end points, and it will recommend the most efficient bus route available." },
+            { q: "How do I use the Chatbot?", a: "Click on the 'Chat' button to open the chatbot window. You can ask 'Mr. Conductor' questions about bus routes, timings, and schedules, and it will provide you with helpful information based on our data." }
+        ];
+
+        function openHelpModal() {
+            helpModal.classList.remove('hidden');
+            renderFaqs();
+        }
+
+        function renderFaqs() {
+            faqSection.innerHTML = '';
+            faqs.forEach(faq => {
+                const faqItem = document.createElement('div');
+                faqItem.classList.add('mb-4');
+                faqItem.innerHTML = `<h4 class="font-bold text-lg">${faq.q}</h4><p class="text-gray-700">${faq.a}</p>`;
+                faqSection.appendChild(faqItem);
+            });
+        }
+
+        closeHelpModal.addEventListener('click', () => {
+            helpModal.classList.add('hidden');
+        });
+
+        document.getElementById('helpLink').addEventListener('click', (e) => {
+            e.preventDefault();
+            openHelpModal();
+        });
+
+        loadBusData();
+        setLanguage('en');
+    </script>
+</body>
+</html>
